@@ -1,0 +1,333 @@
+// ets2la_telemetry
+
+// Format:  @struct name | channel prefix | description
+//          name | type | unit | binding | description
+//   type:     bool u32 s32 u64 s64 f32 f64 str:<length>, or the name of another @struct. "[N]" makes it an array.
+//   prefix:   SDK channel name prefix of the struct ("inherit" = the one of the struct that contains it, "empty" = none).
+//   binding:  ch:<channel>             SDK channel, relative to the prefix
+//             cfg:<id>:<attribute>     SDK configuration attribute ("@" = id of the owning vehicle)
+//             ev:<id>:<attribute>      SDK gameplay event attribute
+//             present:<id>             true while the configuration <id> is not empty
+//             evcount:<id> / evtime:<id>  number of occurrences / in-game time of the gameplay event <id>
+//             -                        filled in by the plugin itself (derived value)
+
+# Sizes
+@const WHEEL_MAX | 16
+@const TRAILER_MAX | 10
+@const GEAR_FORWARD_MAX | 24
+@const GEAR_REVERSE_MAX | 8
+@const HSHIFTER_SLOT_MAX | 32
+@const HSHIFTER_SELECTOR_MAX | 2
+@const SUBSTANCE_MAX | 64
+
+# Vec3f
+@struct Vec3f | inherit | Three component float vector.
+x | f32 |  | - | X component.
+y | f32 |  | - | Y component.
+z | f32 |  | - | Z component.
+
+# Vec3d
+@struct Vec3d | inherit | Three component double vector.
+x | f64 |  | - | X component.
+y | f64 |  | - | Y component.
+z | f64 |  | - | Z component.
+
+# Euler
+@struct Euler | inherit | Orientation of an object, every angle is stored in turns (1.0 = 360 degrees), not in degrees or radians.
+heading | f32 | turns, [0, 1) | - | Rotation around the vertical axis, counterclockwise seen from above. 0 = north, 0.25 = west, 0.5 = south, 0.75 = east.
+pitch | f32 | turns, [-0.25, 0.25] | - | Up/down angle. 0 = horizontal, +0.25 = straight up, -0.25 = straight down.
+roll | f32 | turns, [-0.5, 0.5] | - | Rotation around the forward axis, counterclockwise seen in the looking direction.
+
+# PlacementF
+@struct PlacementF | inherit | Position and orientation with float precision.
+position | Vec3f | m | - | Position.
+orientation | Euler |  | - | Orientation.
+
+# PlacementD
+@struct PlacementD | inherit | Position and orientation with double precision (needed for world coordinates).
+position | Vec3d | m | - | Position.
+orientation | Euler |  | - | Orientation.
+
+# Game
+@struct Game | empty | State of the game and its clocks.
+id | u32 |  | - | Which game loaded the plugin. 0 = unknown, 1 = Euro Truck Simulator 2, 2 = American Truck Simulator.
+version_major | u32 |  | - | Major version of the game specific telemetry interface (see scssdk_telemetry_eut2.h / _ats.h).
+version_minor | u32 |  | - | Minor version of the game specific telemetry interface. Channels added in newer versions stay 0 on older games.
+api_major | u32 |  | - | Major version of the telemetry API the game negotiated with the plugin.
+api_minor | u32 |  | - | Minor version of the telemetry API the game negotiated with the plugin.
+paused | bool |  | - | True while the game is paused (menu, map, loading). Most channels stop updating then.
+config_changes | u32 |  | - | Counter that increases whenever the game sent a configuration event (truck, trailer, job, ... changed). Re-read strings and configuration values when it changes.
+timer_restarts | u32 |  | - | Counter that increases whenever the game restarted its timers (for example after loading a save). The three clocks below stay continuous anyway.
+render_time_us | u64 | microseconds | - | Continuous clock that drives the visualization, starts at 0 when the plugin loads. Its step follows the rendering frame rate.
+simulation_time_us | u64 | microseconds | - | Continuous clock of the physics simulation. Advances in fixed steps, also while the simulation is paused.
+paused_simulation_time_us | u64 | microseconds | - | Like simulation_time_us but stops while the physics simulation is paused.
+game_time_minutes | u32 | in-game minutes | ch:game.time | Absolute in-game time since 00:00 of the first in-game day. Divide by 1440 for days, modulo 1440 for the time of day.
+multiplayer_time_offset_minutes | s32 | in-game minutes | ch:multiplayer.time.offset | Offset from the local game time to the Convoy server time. 0 when multiplayer is not active.
+next_rest_stop_minutes | s32 | in-game minutes | ch:rest.stop | Time until the next rest stop is needed (fatigue). Behaviour is game dependent while fatigue simulation is off.
+local_scale | f32 |  | ch:local.scale | Scale between real and in-game time/distance of the current map region (1 real second = local_scale in-game seconds). 0 for games with a 1:1 map.
+
+# Wheel
+@struct Wheel | inherit | One wheel of a truck or trailer. Only the first wheel_count entries are used, the rest stays 0.
+position | Vec3f | m | cfg:@:wheel.position | Position of the wheel center in vehicle space.
+radius | f32 | m | cfg:@:wheel.radius | Radius of the wheel.
+steerable | bool |  | cfg:@:wheel.steerable | True if the wheel is steered.
+simulated | bool |  | cfg:@:wheel.simulated | True if the wheel is physically simulated.
+powered | bool |  | cfg:@:wheel.powered | True if the wheel is driven by the engine.
+liftable | bool |  | cfg:@:wheel.liftable | True if the axle of the wheel can be lifted.
+on_ground | bool |  | ch:wheel.on_ground | True if the wheel touches the ground.
+substance | u32 |  | ch:wheel.substance | Index into substances.ids describing the surface below the wheel.
+suspension_deflection | f32 | m | ch:wheel.suspension.deflection | Vertical displacement of the wheel from its axis.
+angular_velocity | f32 | rotations/s | ch:wheel.angular_velocity | Rotation speed of the wheel. Positive = forward movement.
+steering | f32 | turns, [-0.25, 0.25] | ch:wheel.steering | Steering angle of the wheel, 0 for non steered wheels. +0.25 = fully left, -0.25 = fully right.
+rotation | f32 | turns, [0, 1) | ch:wheel.rotation | Rolling rotation of the wheel. Increases with forward movement.
+lift | f32 | [0, 1] | ch:wheel.lift | Lift state of the axle. 0 = not lifted, 1 = fully lifted. 0 for non liftable axles.
+lift_offset | f32 | m | ch:wheel.lift.offset | Vertical displacement of the axle caused by lifting. Not linear to lift.
+
+# HShifterSlot
+@struct HShifterSlot | inherit | One slot of the H-shifter. The slot whose handle position and selector bitmask match the current shifter state selects the gear.
+gear | s32 |  | cfg:hshifter:slot.gear | Gear selected when this slot matches. >0 forward, 0 neutral, <0 reverse.
+handle_position | u32 |  | cfg:hshifter:slot.handle.position | Required position of the shifter handle. 0 = neutral position.
+selectors | u32 |  | cfg:hshifter:slot.selectors | Bitmask of the required on/off state of the range/splitter selectors. Only the first selector_count bits matter.
+
+# HShifter
+@struct HShifter | truck.hshifter. | H-shifter configuration and state.
+selector_count | u32 |  | cfg:hshifter:selector.count | Number of range/splitter selector toggles.
+slots | HShifterSlot[32] |  | - | Slot table. Unused slots are all 0.
+slot | u32 |  | ch:slot | Slot the shifter handle is currently in. 0 = no slot selected.
+selector_enabled | bool[2] |  | ch:select | Current on/off state of each range/splitter selector.
+
+# Truck
+@struct Truck | truck. | The truck the player drives (configuration and live state). The same channels are delivered for every vehicle the player drives.
+present | bool |  | present:truck | True while the game reports a configured truck. All configuration values are 0 otherwise.
+brand_id | str:64 |  | cfg:truck:brand_id | Brand identifier for code, for example "scania".
+brand | str:64 |  | cfg:truck:brand | Brand name for display, localized with the in-game language at game start.
+id | str:64 |  | cfg:truck:id | Truck model identifier for code, for example "vehicle.scania.s_2016".
+name | str:64 |  | cfg:truck:name | Truck model name for display.
+license_plate | str:64 |  | cfg:truck:license.plate | License plate text.
+license_plate_country | str:64 |  | cfg:truck:license.plate.country | License plate country name for display.
+license_plate_country_id | str:64 |  | cfg:truck:license.plate.country.id | License plate country identifier for code.
+shifter_type | str:32 |  | cfg:controls:shifter.type | Gearbox type selected in the game options: "arcade", "automatic", "manual" or "hshifter".
+fuel_capacity | f32 | liters | cfg:truck:fuel.capacity | Fuel tank capacity.
+fuel_warning_factor | f32 | [0, 1] | cfg:truck:fuel.warning.factor | Fraction of fuel_capacity below which the low fuel warning activates.
+adblue_capacity | f32 | liters | cfg:truck:adblue.capacity | AdBlue tank capacity. 0 on ATS.
+adblue_warning_factor | f32 | [0, 1] | cfg:truck:adblue.warning.factor | Fraction of adblue_capacity below which the low AdBlue warning activates.
+air_pressure_warning_threshold | f32 | psi | cfg:truck:brake.air.pressure.warning | Brake air pressure below which the warning activates.
+air_pressure_emergency_threshold | f32 | psi | cfg:truck:brake.air.pressure.emergency | Brake air pressure below which the emergency brakes activate.
+oil_pressure_warning_threshold | f32 | psi | cfg:truck:oil.pressure.warning | Oil pressure below which the warning activates.
+water_temperature_warning_threshold | f32 | degrees Celsius | cfg:truck:water.temperature.warning | Water temperature above which the warning activates.
+battery_voltage_warning_threshold | f32 | volts | cfg:truck:battery.voltage.warning | Battery voltage below which the warning activates.
+rpm_limit | f32 | rpm | cfg:truck:rpm.limit | Maximum engine rpm.
+differential_ratio | f32 |  | cfg:truck:differential.ratio | Differential ratio.
+forward_gear_count | u32 |  | cfg:truck:gears.forward | Number of forward gears of an undamaged truck.
+reverse_gear_count | u32 |  | cfg:truck:gears.reverse | Number of reverse gears of an undamaged truck.
+retarder_step_count | u32 |  | cfg:truck:retarder.steps | Number of retarder steps. 0 if no retarder is mounted.
+wheel_count | u32 |  | cfg:truck:wheels.count | Number of wheels. Only this many entries of wheels[] are valid.
+forward_ratios | f32[24] |  | cfg:truck:forward.ratio | Transmission ratio of each forward gear (index 0 = first gear).
+reverse_ratios | f32[8] |  | cfg:truck:reverse.ratio | Transmission ratio of each reverse gear (index 0 = first reverse gear).
+cabin_position | Vec3f | m | cfg:truck:cabin.position | Position of the joint the cabin rotates around, in vehicle space.
+head_position | Vec3f | m | cfg:truck:head.position | Default position of the driver's head in cabin space.
+hook_position | Vec3f | m | cfg:truck:hook.position | Position of the trailer hook in vehicle space.
+hshifter | HShifter |  | - | H-shifter configuration and state.
+world | PlacementD | m / turns | ch:world.placement | World position and orientation of the truck. position.x/z span the ground plane, position.y is the height.
+local_linear_velocity | Vec3f | m/s | ch:local.velocity.linear | Linear velocity in vehicle space.
+local_angular_velocity | Vec3f | rotations/s | ch:local.velocity.angular | Angular velocity in vehicle space.
+local_linear_acceleration | Vec3f | m/s^2 | ch:local.acceleration.linear | Linear acceleration in vehicle space.
+local_angular_acceleration | Vec3f | rotations/s^2 | ch:local.acceleration.angular | Angular acceleration in vehicle space.
+cabin_offset | PlacementF | m / turns | ch:cabin.offset | Position and orientation delta of the cabin from its default position (cabin sway).
+cabin_angular_velocity | Vec3f | rotations/s | ch:cabin.velocity.angular | Angular velocity of the cabin in cabin space.
+cabin_angular_acceleration | Vec3f | rotations/s^2 | ch:cabin.acceleration.angular | Angular acceleration of the cabin in cabin space.
+head_offset | PlacementF | m / turns | ch:head.offset | Position and orientation delta of the driver's head from its default position, in cabin space. Changes abruptly when the camera changes.
+speed | f32 | m/s | ch:speed | Speedometer speed. Negative while driving in reverse.
+odometer | f32 | km | ch:odometer | Odometer value.
+engine_rpm | f32 | rpm | ch:engine.rpm | Engine speed.
+gear | s32 |  | ch:engine.gear | Gear selected in the gearbox. >0 forward, 0 neutral, <0 reverse.
+displayed_gear | s32 |  | ch:displayed.gear | Gear shown on the dashboard. >0 forward, 0 neutral, <0 reverse.
+engine_enabled | bool |  | ch:engine.enabled | True while the engine is running.
+electric_enabled | bool |  | ch:electric.enabled | True while the electrics (ignition) are on.
+input_steering | f32 | [-1, 1] | ch:input.steering | Steering input of the driver. Counterclockwise: -1 = right, +1 = left.
+input_throttle | f32 | [0, 1] | ch:input.throttle | Throttle input of the driver.
+input_brake | f32 | [0, 1] | ch:input.brake | Brake input of the driver.
+input_clutch | f32 | [0, 1] | ch:input.clutch | Clutch input of the driver.
+effective_steering | f32 | [-1, 1] | ch:effective.steering | Steering the simulation uses (after interpolation and counter forces). Counterclockwise: -1 = right, +1 = left.
+effective_throttle | f32 | [0, 1] | ch:effective.throttle | Throttle the simulation uses (includes attack curve and cruise control).
+effective_brake | f32 | [0, 1] | ch:effective.brake | Brake pedal the simulation uses. Does not include retarder, parking or engine brake.
+effective_clutch | f32 | [0, 1] | ch:effective.clutch | Clutch the simulation uses (includes automatic shifting).
+cruise_control_speed | f32 | m/s | ch:cruise_control | Speed set on the cruise control. 0 if the cruise control is off.
+cruise_control_enabled | bool |  | - | True while the cruise control is active (cruise_control_speed > 0). Derived by the plugin.
+parking_brake | bool |  | ch:brake.parking | True while the parking brake is applied.
+motor_brake | bool |  | ch:brake.motor | True while the engine brake is enabled.
+retarder_level | u32 |  | ch:brake.retarder | Current retarder level, 0 = off up to retarder_step_count.
+brake_air_pressure | f32 | psi | ch:brake.air.pressure | Pressure in the brake air tank (loosely approximated by the game).
+brake_air_pressure_warning | bool |  | ch:brake.air.pressure.warning | True while the low air pressure warning is active.
+brake_air_pressure_emergency | bool |  | ch:brake.air.pressure.emergency | True while the emergency brakes are active because of low air pressure.
+brake_temperature | f32 | degrees Celsius | ch:brake.temperature | Brake temperature, approximated for the whole truck.
+fuel | f32 | liters | ch:fuel.amount | Fuel in the tank.
+fuel_warning | bool |  | ch:fuel.warning | True while the low fuel warning is active.
+fuel_average_consumption | f32 | liters/km | ch:fuel.consumption.average | Average fuel consumption.
+fuel_range | f32 | km | ch:fuel.range | Estimated range with the current fuel.
+adblue | f32 | liters | ch:adblue | AdBlue in the tank. 0 on ATS.
+adblue_warning | bool |  | ch:adblue.warning | True while the low AdBlue warning is active.
+adblue_average_consumption | f32 | liters/km | ch:adblue.consumption.average | Average AdBlue consumption. 0 on ATS.
+oil_pressure | f32 | psi | ch:oil.pressure | Oil pressure (loosely approximated by the game).
+oil_pressure_warning | bool |  | ch:oil.pressure.warning | True while the low oil pressure warning is active.
+oil_temperature | f32 | degrees Celsius | ch:oil.temperature | Oil temperature.
+water_temperature | f32 | degrees Celsius | ch:water.temperature | Coolant temperature.
+water_temperature_warning | bool |  | ch:water.temperature.warning | True while the high water temperature warning is active.
+battery_voltage | f32 | volts | ch:battery.voltage | Battery voltage.
+battery_voltage_warning | bool |  | ch:battery.voltage.warning | True while the low battery voltage / not charging warning is active.
+left_blinker | bool |  | ch:lblinker | True while the left blinker is switched on. Stays true while the light is off between blinks.
+right_blinker | bool |  | ch:rblinker | True while the right blinker is switched on. Stays true while the light is off between blinks.
+hazard_warning | bool |  | ch:hazard.warning | True while the hazard warning lights are switched on.
+left_blinker_light | bool |  | ch:light.lblinker | True while the left blinker lamp is physically lit (blinks).
+right_blinker_light | bool |  | ch:light.rblinker | True while the right blinker lamp is physically lit (blinks).
+parking_lights | bool |  | ch:light.parking | True while the parking lights are on.
+low_beam | bool |  | ch:light.beam.low | True while the low beam is on.
+high_beam | bool |  | ch:light.beam.high | True while the high beam is on.
+aux_front_lights | u32 |  | ch:light.aux.front | Auxiliary front lights. 0 = off, 1 = dimmed, 2 = full.
+aux_roof_lights | u32 |  | ch:light.aux.roof | Auxiliary roof lights. 0 = off, 1 = dimmed, 2 = full.
+beacon | bool |  | ch:light.beacon | True while the beacon lights are on.
+brake_light | bool |  | ch:light.brake | True while the brake light is lit.
+reverse_light | bool |  | ch:light.reverse | True while the reverse light is lit.
+wipers | bool |  | ch:wipers | True while the wipers are on.
+dashboard_backlight | f32 | [0, 1] | ch:dashboard.backlight | Intensity of the dashboard backlight.
+differential_lock | bool |  | ch:differential_lock | True while the differential lock is enabled.
+lift_axle | bool |  | ch:lift_axle | True while the lift axle control is set to lifted.
+lift_axle_indicator | bool |  | ch:lift_axle.indicator | True while the lift axle indicator is lit.
+trailer_lift_axle | bool |  | ch:trailer.lift_axle | True while the trailer lift axle control is set to lifted.
+trailer_lift_axle_indicator | bool |  | ch:trailer.lift_axle.indicator | True while the trailer lift axle indicator is lit.
+wear_engine | f32 | [0, 1] | ch:wear.engine | Wear of the engine.
+wear_transmission | f32 | [0, 1] | ch:wear.transmission | Wear of the transmission.
+wear_cabin | f32 | [0, 1] | ch:wear.cabin | Wear of the cabin.
+wear_chassis | f32 | [0, 1] | ch:wear.chassis | Wear of the chassis.
+wear_wheels | f32 | [0, 1] | ch:wear.wheels | Average wear of the wheels.
+navigation_distance | f32 | m | ch:navigation.distance | Remaining distance of the navigation route (value of the route advisor).
+navigation_time | f32 | s | ch:navigation.time | Estimated remaining time of the navigation route (value of the route advisor).
+navigation_speed_limit | f32 | m/s | ch:navigation.speed.limit | Speed limit at the current position (follows the "Route Advisor speed limit" game option). 0 = no limit.
+wheels | Wheel[16] |  | - | Wheels of the truck.
+
+# Trailer
+@struct Trailer | trailer. | One trailer. Index 0 is the trailer attached to the truck, doubles and triples follow. Everything is 0 for slots without a trailer.
+connected | bool |  | ch:connected | True while the trailer is connected to the truck.
+present | bool |  | present:trailer | True while the game reports a configuration for this trailer slot. Stays true while the trailer is detached.
+id | str:64 |  | cfg:trailer:id | Trailer identifier for code.
+cargo_accessory_id | str:64 |  | cfg:trailer:cargo.accessory.id | Identifier of the cargo accessory (the load) of the trailer.
+brand_id | str:64 |  | cfg:trailer:brand_id | Brand identifier for code.
+brand | str:64 |  | cfg:trailer:brand | Brand name for display.
+name | str:64 |  | cfg:trailer:name | Trailer name for display.
+chain_type | str:64 |  | cfg:trailer:chain.type | Chain type of the trailer combination. Only reported for the first trailer.
+body_type | str:64 |  | cfg:trailer:body.type | Body type of the trailer. Only reported for the first trailer.
+license_plate | str:64 |  | cfg:trailer:license.plate | License plate text.
+license_plate_country | str:64 |  | cfg:trailer:license.plate.country | License plate country name for display.
+license_plate_country_id | str:64 |  | cfg:trailer:license.plate.country.id | License plate country identifier for code.
+wheel_count | u32 |  | cfg:trailer:wheels.count | Number of wheels. Only this many entries of wheels[] are valid.
+hook_position | Vec3f | m | cfg:trailer:hook.position | Position of the trailer hook in trailer space.
+cargo_damage | f32 | [0, 1] | ch:cargo.damage | Damage of the cargo loaded on this trailer.
+world | PlacementD | m / turns | ch:world.placement | World position and orientation of the trailer.
+local_linear_velocity | Vec3f | m/s | ch:velocity.linear | Linear velocity in trailer space.
+local_angular_velocity | Vec3f | rotations/s | ch:velocity.angular | Angular velocity in trailer space.
+local_linear_acceleration | Vec3f | m/s^2 | ch:acceleration.linear | Linear acceleration in trailer space.
+local_angular_acceleration | Vec3f | rotations/s^2 | ch:acceleration.angular | Angular acceleration in trailer space.
+wear_body | f32 | [0, 1] | ch:wear.body | Wear of the trailer body.
+wear_chassis | f32 | [0, 1] | ch:wear.chassis | Wear of the trailer chassis.
+wear_wheels | f32 | [0, 1] | ch:wear.wheels | Average wear of the trailer wheels.
+wheels | Wheel[16] |  | - | Wheels of the trailer.
+
+# Job
+@struct Job | job. | The active job. Everything is 0 while no job is active.
+present | bool |  | present:job | True while a job is active.
+cargo_id | str:64 |  | cfg:job:cargo.id | Cargo identifier for code.
+cargo | str:64 |  | cfg:job:cargo | Cargo name for display.
+cargo_mass | f32 | kg | cfg:job:cargo.mass | Total mass of the cargo.
+cargo_unit_mass | f32 | kg | cfg:job:cargo.unit.mass | Mass of one cargo unit.
+cargo_unit_count | u32 |  | cfg:job:cargo.unit.count | Number of cargo units of the job.
+cargo_damage | f32 | [0, 1] | ch:cargo.damage | Total damage of the cargo.
+is_cargo_loaded | bool |  | cfg:job:cargo.loaded | True if the cargo is loaded on the trailer. Always true for jobs that do not come from the cargo market.
+special_job | bool |  | cfg:job:is.special.job | True for special transport jobs.
+market | str:32 |  | cfg:job:job.market | Where the job comes from: "cargo_market", "quick_job", "freight_market", "external_contracts" or "external_market".
+source_city_id | str:64 |  | cfg:job:source.city.id | Identifier of the source city for code.
+source_city | str:64 |  | cfg:job:source.city | Name of the source city for display.
+source_company_id | str:64 |  | cfg:job:source.company.id | Identifier of the source company for code. Empty for special transport jobs.
+source_company | str:64 |  | cfg:job:source.company | Name of the source company for display. Empty for special transport jobs.
+destination_city_id | str:64 |  | cfg:job:destination.city.id | Identifier of the destination city for code.
+destination_city | str:64 |  | cfg:job:destination.city | Name of the destination city for display.
+destination_company_id | str:64 |  | cfg:job:destination.company.id | Identifier of the destination company for code. Empty for special transport jobs.
+destination_company | str:64 |  | cfg:job:destination.company | Name of the destination company for display. Empty for special transport jobs.
+income | u64 | currency | cfg:job:income | Expected income without penalties, in the game's currency (ETS2: Euro, ATS: US dollar).
+planned_distance_km | u32 | km | cfg:job:planned_distance.km | Planned distance of the job in simulated kilometers. Does not include ferry distance.
+delivery_time_minutes | u32 | in-game minutes | cfg:job:delivery.time | Absolute in-game time at which the delivery window ends. Compare with game.game_time_minutes.
+delivery_time_remaining_minutes | s32 | in-game minutes | - | delivery_time_minutes minus the current in-game time. Negative once the job is late. Derived by the plugin.
+started_game_time_minutes | u32 | in-game minutes | - | In-game time at which the plugin saw the job appear (0 if the game time was not known yet, for example when the job was already active while the plugin loaded). Derived by the plugin.
+
+# JobDeliveredEvent
+@struct JobDeliveredEvent | inherit | Last job that was delivered.
+count | u32 |  | evcount:job.delivered | How many times the event fired since the plugin loaded. A change means a new event.
+game_time_minutes | u32 | in-game minutes | evtime:job.delivered | In-game time when the event fired.
+revenue | s64 | currency | ev:job.delivered:revenue | Revenue of the job in the game's currency.
+earned_xp | s32 |  | ev:job.delivered:earned.xp | XP the player received.
+cargo_damage | f32 | [0, 1] | ev:job.delivered:cargo.damage | Total cargo damage at delivery.
+distance_km | f32 | km | ev:job.delivered:distance.km | Real distance driven on the job.
+delivery_time_minutes | u32 | in-game minutes | ev:job.delivered:delivery.time | Total time spent on the job.
+autopark_used | bool |  | ev:job.delivered:auto.park.used | True if auto parking was used.
+autoload_used | bool |  | ev:job.delivered:auto.load.used | True if auto loading was used (always true for non cargo market jobs).
+
+# JobCancelledEvent
+@struct JobCancelledEvent | inherit | Last job that was cancelled.
+count | u32 |  | evcount:job.cancelled | How many times the event fired since the plugin loaded. A change means a new event.
+game_time_minutes | u32 | in-game minutes | evtime:job.cancelled | In-game time when the event fired.
+penalty | s64 | currency | ev:job.cancelled:cancel.penalty | Penalty for cancelling the job (can be 0).
+
+# FinedEvent
+@struct FinedEvent | inherit | Last fine the player received.
+count | u32 |  | evcount:player.fined | How many times the event fired since the plugin loaded. A change means a new event.
+game_time_minutes | u32 | in-game minutes | evtime:player.fined | In-game time when the event fired.
+offence | str:32 |  | ev:player.fined:fine.offence | Offence type: crash, avoid_sleeping, wrong_way, speeding_camera, no_lights, red_signal, speeding, avoid_weighing, illegal_trailer, avoid_inspection, illegal_border_crossing, hard_shoulder_violation, damaged_vehicle_usage or generic.
+amount | s64 | currency | ev:player.fined:fine.amount | Fine amount.
+
+# TollgateEvent
+@struct TollgateEvent | inherit | Last tollgate the player paid.
+count | u32 |  | evcount:player.tollgate.paid | How many times the event fired since the plugin loaded. A change means a new event.
+game_time_minutes | u32 | in-game minutes | evtime:player.tollgate.paid | In-game time when the event fired.
+pay_amount | s64 | currency | ev:player.tollgate.paid:pay.amount | Amount the player was charged.
+
+# FerryEvent
+@struct FerryEvent | inherit | Last ferry the player used.
+count | u32 |  | evcount:player.use.ferry | How many times the event fired since the plugin loaded. A change means a new event.
+game_time_minutes | u32 | in-game minutes | evtime:player.use.ferry | In-game time when the event fired.
+pay_amount | s64 | currency | ev:player.use.ferry:pay.amount | Amount the player was charged.
+source_name | str:64 |  | ev:player.use.ferry:source.name | Name of the departure port for display.
+target_name | str:64 |  | ev:player.use.ferry:target.name | Name of the arrival port for display.
+source_id | str:64 |  | ev:player.use.ferry:source.id | Identifier of the departure port.
+target_id | str:64 |  | ev:player.use.ferry:target.id | Identifier of the arrival port.
+
+# TrainEvent
+@struct TrainEvent | inherit | Last train the player used.
+count | u32 |  | evcount:player.use.train | How many times the event fired since the plugin loaded. A change means a new event.
+game_time_minutes | u32 | in-game minutes | evtime:player.use.train | In-game time when the event fired.
+pay_amount | s64 | currency | ev:player.use.train:pay.amount | Amount the player was charged.
+source_name | str:64 |  | ev:player.use.train:source.name | Name of the departure station for display.
+target_name | str:64 |  | ev:player.use.train:target.name | Name of the arrival station for display.
+source_id | str:64 |  | ev:player.use.train:source.id | Identifier of the departure station.
+target_id | str:64 |  | ev:player.use.train:target.id | Identifier of the arrival station.
+
+# Events
+@struct Events | inherit | Gameplay events. Each entry keeps the payload of the last occurrence, detect a new occurrence by a change of its count.
+job_delivered | JobDeliveredEvent |  | - | Last delivered job.
+job_cancelled | JobCancelledEvent |  | - | Last cancelled job.
+fined | FinedEvent |  | - | Last fine.
+tollgate | TollgateEvent |  | - | Last paid tollgate.
+ferry | FerryEvent |  | - | Last used ferry.
+train | TrainEvent |  | - | Last used train.
+
+# Substances
+@struct Substances | inherit | Surface types the game knows. wheels[].substance indexes into ids.
+count | u32 |  | - | Number of valid entries in ids.
+ids | str:32[64] |  | cfg:substances:id | Identifier of each substance, for example "road" or "grass". Longer names are truncated.
+
+# TelemetryData
+@struct TelemetryData | inherit | Everything the plugin publishes. One consistent copy exists per game frame.
+game | Game |  | - | State of the game and its clocks.
+truck | Truck |  | - | The truck the player drives.
+trailers | Trailer[10] |  | - | Trailers, index 0 is the first trailer.
+job | Job |  | - | The active job.
+events | Events |  | - | Gameplay events.
+substances | Substances |  | - | Surface types.
