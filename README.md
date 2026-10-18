@@ -1,3 +1,5 @@
+<sub>**NOTE**: This repository is a *major* rewrite of the original by truckermudgeon et al. This fork is not intended to be merged back, we are forking to maintain the attribution of those before us ❤️</sub>
+
 # ets2la_telemetry
 
 In-process telemetry for Euro Truck Simulator 2 / American Truck Simulator.
