@@ -279,7 +279,7 @@ class TelemetryReader:
         self.close()
         h = kernel32.OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, False, CONTROL_NAME)
         if not h:
-            return self._fail("telemetry not running (OpenFileMapping failed). Is ets2la_telemetry.dll loaded?")
+            return False
         addr = kernel32.MapViewOfFile(h, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, CONTROL_BYTES)
         if not addr:
             kernel32.CloseHandle(h)
@@ -353,7 +353,6 @@ class TelemetryReader:
             return m
         h = kernel32.OpenFileMappingW(FILE_MAP_READ, False, DATA_NAME)
         if not h:
-            self._fail("data mapping not found")
             return None
         addr = kernel32.MapViewOfFile(h, FILE_MAP_READ, 0, 0, 0)
         if not addr:

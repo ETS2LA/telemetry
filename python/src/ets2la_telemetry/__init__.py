@@ -23,7 +23,7 @@ from ._data import (
 )
 from .telemetry_reader import Telemetry, TelemetryReader, TelemetryStats
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 __all__ = [
     "Euler", "Events", "FerryEvent", "FinedEvent", "Game", "HShifter", "HShifterSlot", "Job",
     "JobCancelledEvent", "JobDeliveredEvent", "PlacementD", "PlacementF", "Substances", "Telemetry",

@@ -155,7 +155,7 @@ public:
         disconnect();
         ctlMap_ = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, kControlName);
         if (!ctlMap_) {
-            return fail("telemetry not running (OpenFileMapping failed). Is ets2la_telemetry.dll loaded?");
+            return false;
         }
         ctl_ = static_cast<ControlBlock*>(MapViewOfFile(ctlMap_, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, kControlBytes));
         if (!ctl_) {
@@ -262,7 +262,7 @@ private:
         auto m = std::make_shared<Mapping>();
         m->handle = OpenFileMappingW(FILE_MAP_READ, FALSE, kDataName);
         if (!m->handle) {
-            return fail("data mapping not found");
+            return false;
         }
         m->base = MapViewOfFile(m->handle, FILE_MAP_READ, 0, 0, 0);
         if (!m->base) {
